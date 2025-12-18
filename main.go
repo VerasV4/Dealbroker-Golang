@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -80,10 +81,8 @@ func main() {
 		)
 
 		if err != nil {
-			log.Printf("Erro na extração (possível refresh): %v", err)
-			chromedp.Run(ctx, chromedp.Reload())
-			time.Sleep(5 * time.Second)
-			continue
+			log.Printf("Erro Crítico (%v). Encerrando para reinício automático do Systemd...", err)
+			os.Exit(1)
 		}
 
 		if len(leads) > 0 {
@@ -112,7 +111,10 @@ func processLeads(srv *sheets.Service, leads []Lead) {
 	if len(resp.Values) > 0 {
 		for _, row := range resp.Values {
 			if len(row) > 1 {
-				existingNames[fmt.Sprintf("%v", row[1])] = true
+				// CORREÇÃO 1: TrimSpace para garantir que não haja espaços invisíveis
+				// E conversão robusta para string
+				nameInSheet := strings.TrimSpace(fmt.Sprintf("%v", row[1]))
+				existingNames[nameInSheet] = true
 			}
 		}
 	}
@@ -121,16 +123,32 @@ func processLeads(srv *sheets.Service, leads []Lead) {
 	timestamp := time.Now().Format("02/01/2006 15:04")
 
 	for _, lead := range leads {
-		if _, exists := existingNames[lead.Nome]; !exists {
-			log.Printf("Novo Lead detectado: %s", lead.Nome)
+		// Limpar o nome que vem do scraper também
+		cleanName := strings.TrimSpace(lead.Nome)
+
+		if _, exists := existingNames[cleanName]; !exists {
+			log.Printf("Novo Lead detectado: %s", cleanName)
 
 			go sendWhatsapp(lead)
 
+			// Atualiza o mapa localmente para evitar duplicados no mesmo lote de execução
+			existingNames[cleanName] = true
+
+			// CORREÇÃO 2: Forçar o Google Sheets a entender como TEXTO
+			// Adicionamos um apóstrofo (') antes do nome. O Sheets oculta o ' e trata como texto.
+			formattedName := "'" + cleanName
+
 			// Preparar linha
 			row := []interface{}{
-				timestamp, lead.Nome, lead.Tipo, lead.Segmento,
-				lead.Faturamento, lead.Produto, lead.Canal,
-				lead.Preco, lead.TempoRestante,
+				timestamp,
+				formattedName, // Usamos o nome formatado aqui
+				lead.Tipo,
+				lead.Segmento,
+				lead.Faturamento,
+				lead.Produto,
+				lead.Canal,
+				lead.Preco,
+				lead.TempoRestante,
 			}
 			newRows = append(newRows, row)
 		}
